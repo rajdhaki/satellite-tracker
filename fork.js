@@ -6,7 +6,7 @@ const Fork = () => {
     return (
         <>
             <p style={{"position":"absolute", "top": "94vh", "left" : "85vw", "fontSize": "15px"}}> 
-                Developed by Raj 
+                Developed by Kripya 
             </p>
         </>
 
