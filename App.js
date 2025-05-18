@@ -1,4 +1,5 @@
 import React, { Component } from 'react';
+
 import "./assets/theme.css";
 import { Engine } from './engine';
 import Info from './Info';
@@ -8,6 +9,7 @@ import Fork from './fork';
 import * as qs from 'query-string';
 import Highlights from './highlights';
 import DateSlider from './Options/DateSlider';
+import './App.css'
 
 // Some config
 const UseDateSlider = false;
@@ -27,7 +29,11 @@ class App extends Component {
         queryObjectCount: 0,
         initialDate: new Date().getTime(),
         currentDate: new Date().getTime(), 
-        referenceFrame: UseDateSlider ? 2 : 1
+        referenceFrame: UseDateSlider ? 2 : 1,
+        userLocation: null,
+        locationSatellites: [],
+        userCountry: null,
+        countrySatellites: []
     }
 
     componentDidMount() {
@@ -187,8 +193,134 @@ class App extends Component {
         return result.toString();
     }
 
+    getCurrentLocation = () => {
+        if ("geolocation" in navigator) {
+            navigator.geolocation.getCurrentPosition(
+                (position) => {
+                    const { latitude, longitude } = position.coords;
+                    
+                    fetch(
+                        `https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${latitude}&longitude=${longitude}&localityLanguage=en`
+                    )
+                    .then(response => response.json())
+                    .then(data => {
+                        // Get country instead of state
+                        const country = data.countryName;
+                        
+                        // Filter satellites based on country location
+                        const relevantSatellites = this.filterSatellitesByCountry(
+                            this.state.stations,
+                            latitude,
+                            longitude,
+                            country
+                        );
+
+                        // Hide all satellites first
+                        this.state.stations.forEach(sat => {
+                            if (sat.mesh) {
+                                sat.mesh.visible = false;
+                            }
+                            if (sat.orbit) {
+                                sat.orbit.visible = false;
+                            }
+                        });
+
+                        // Show only relevant satellites
+                        relevantSatellites.forEach(sat => {
+                            if (sat.mesh) {
+                                sat.mesh.visible = true;
+                                this.engine.highlightStation(sat);
+                            }
+                            if (sat.orbit) {
+                                sat.orbit.visible = true;
+                            }
+                        });
+
+                        this.setState({
+                            userCountry: country,
+                            countrySatellites: relevantSatellites
+                        });
+
+                    })
+                    .catch(error => {
+                        console.error("Error getting location:", error);
+                    });
+                },
+                (error) => {
+                    console.error("Error getting location:", error);
+                }
+            );
+        }
+    };
+
+    filterSatellitesByCountry = (satellites, lat, lon, country) => {
+        // Adjust coverage radius based on country size (in degrees)
+        // This is a simplified approach - you might want to adjust these values
+        const countryRadiusMap = {
+            'Russia': 35,
+            'Canada': 30,
+            'United States': 25,
+            'China': 25,
+            'Brazil': 25,
+            'Australia': 25,
+            'India': 20,
+            // Add more countries as needed
+            'default': 15
+        };
+
+        const coverageRadius = countryRadiusMap[country] || countryRadiusMap.default;
+
+        return satellites.filter(satellite => {
+            const position = this.engine._getSatellitePositionFromTle(satellite);
+            if (!position) return false;
+
+            // Convert Cartesian coordinates to lat/lon
+            const satLat = Math.asin(position.y / Math.sqrt(position.x * position.x + position.y * position.y + position.z * position.z)) * (180 / Math.PI);
+            const satLon = Math.atan2(position.z, position.x) * (180 / Math.PI);
+
+            // Calculate distance using Haversine formula
+            const distance = this.calculateDistance(lat, lon, satLat, satLon);
+            
+            // Filter based on distance and satellite type
+            const isInRange = distance <= coverageRadius;
+            const isRelevantType = this.isRelevantSatelliteType(satellite, country);
+            
+            return isInRange && isRelevantType;
+        });
+    };
+
+    isRelevantSatelliteType = (satellite, country) => {
+        // This is a simplified check - you might want to expand this based on your needs
+        const name = satellite.name.toLowerCase();
+        
+        // Example filters based on country
+        switch(country) {
+            case 'India':
+                return name.includes('insat') || 
+                       name.includes('cartosat') || 
+                       name.includes('resourcesat') ||
+                       name.includes('irnss');
+            case 'United States':
+                return name.includes('usa');
+            default:
+                return false;
+        }
+    };
+
+    calculateDistance = (lat1, lon1, lat2, lon2) => {
+        const R = 6371; // Earth's radius in km
+        const dLat = (lat2 - lat1) * Math.PI / 180;
+        const dLon = (lon2 - lon1) * Math.PI / 180;
+        const a = 
+            Math.sin(dLat/2) * Math.sin(dLat/2) +
+            Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * 
+            Math.sin(dLon/2) * Math.sin(dLon/2);
+        const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+        return R * c;
+    };
+
     render() {
-        const { selected, stations, initialDate, currentDate } = this.state;
+        const { selected, stations, initialDate, currentDate, userLocation, locationSatellites, userCountry, countrySatellites } = this.state;
 
         const maxMs = initialDate + DateSliderRangeInMilliseconds;
 
@@ -201,6 +333,24 @@ class App extends Component {
                 <SelectedStations selected={selected} onRemoveStation={this.handleRemoveSelected} onRemoveAll={this.handleRemoveAllSelected} />
                 {UseDateSlider && <DateSlider min={initialDate} max={maxMs} value={currentDate} onChange={this.handleDateChange} onRender={this.renderDate} />}
                 <div ref={c => this.el = c} style={{ width: '99%', height: '99%' }} />
+                {/* <button 
+                    className="location-button" 
+                    onClick={this.getCurrentLocation}
+                >
+                    Show Satellites Over My Location
+                </button> */}
+                {userLocation && (
+                    <div className="location-info">
+                        <p>Your location: {userLocation}</p>
+                        <p>Satellites in view: {locationSatellites.length}</p>
+                    </div>
+                )}
+                {userCountry && (
+                    <div className="location-info">
+                        <p>Your country: {userCountry}</p>
+                        <p>Satellites in view: {countrySatellites.length}</p>
+                    </div>
+                )}
             </div>
         )
     }
